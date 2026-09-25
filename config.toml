@@ -53,6 +53,10 @@ visa_types = []
 #            çıkınca / kaybolunca ya da sayfa değişince haber verir.
 # ---------------------------------------------------------------------------
 
+# Not (25.09.2026): İki adres de aynı işletmeye (visasbot.com) ait. Şu an
+# "VFS değişikliklerine uyum için yeniden inşa ediliyor" bakımında ve veri
+# vermiyor. Geri geldiğinde sistem otomatik olarak kullanmaya başlar ve
+# "tekrar çalışıyor" maili atar.
 [[api]]
 name = "visasbot"
 url = "https://api.visasbot.com/api/visa/list"

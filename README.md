@@ -77,6 +77,21 @@ edilmesi zor bir konu adına abone olun (örn. `vize-takip-8k3j2q9x`), aynı ad�
 `https://api.telegram.org/bot<TOKEN>/getUpdates` adresindeki `chat.id` →
 `TELEGRAM_CHAT_ID`.
 
+## 🔴 Güncel durum (25 Eylül 2026)
+
+Kullanılan veri kaynağı (visasbot.com) şu anda **bakımda**. Sitelerinde
+*"VFS değişikliklerine uyum sağlamak için yeniden inşa ediyoruz, en kısa sürede
+geri döneceğiz"* yazıyor. Bu yüzden:
+
+- Kurulumdan ~3 saat sonra size **bir kez** "⚠️ Vize takip sistemi veri alamıyor"
+  maili gelecek. Bu beklenen bir durum.
+- Kaynak geri geldiğinde **"✅ Vize takip sistemi tekrar çalışıyor"** maili gelir ve
+  randevu bildirimleri kendiliğinden başlar. Sizin bir şey yapmanıza gerek yok.
+
+Denenen ama GitHub sunucularından **erişilemeyen** diğer kaynaklar: Kosmos ve AS Visa
+(yurt dışı sunucuları engelliyor), VFS Global (giriş için hCaptcha + Cloudflare
+Turnstile zorunlu). Kontrol için `Kaynak keşfi (elle)` iş akışı kullanılabilir.
+
 ## Hangi ülkeler için veri var? (kapsam raporu)
 
 Repo → **Actions** → **Vize randevu kontrolü** → **Run workflow** →
