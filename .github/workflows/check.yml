@@ -2,8 +2,9 @@ name: Vize randevu kontrolü
 
 on:
   schedule:
-    # Her 10 dakikada bir (GitHub yoğunlukta birkaç dakika geciktirebilir).
-    - cron: "*/10 * * * *"
+    # Her 10 dakikada bir (:03, :13, :23 ...). Saat başı yoğunluğundan kaçınmak
+    # için 0. dakika kullanılmıyor; GitHub yine de birkaç dakika geciktirebilir.
+    - cron: "3-59/10 * * * *"
   workflow_dispatch:
     inputs:
       test_notify:
