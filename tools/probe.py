@@ -62,12 +62,21 @@ def kosmos_probe(start_url):
             page.goto(start_url, wait_until="networkidle", timeout=60000)
         except Exception as e:  # noqa: BLE001
             print("goto hata:", e)
+        page.wait_for_timeout(5000)
         page.screenshot(path="probe/01-home.png", full_page=True)
+        print("\n### Görünen metin (ilk 4000 karakter)")
+        try:
+            print(page.inner_text("body")[:4000])
+        except Exception as e:  # noqa: BLE001
+            print("metin alınamadı:", e)
+        print("\n### Tüm linkler (ilk 150)")
+        for a in page.query_selector_all("a")[:150]:
+            print("-", (a.inner_text() or "").strip().replace("\n", " ")[:50], "->", a.get_attribute("href"))
         print("\n### Ana sayfa linkleri (randevu içerenler)")
         for a in page.query_selector_all("a"):
             href = a.get_attribute("href") or ""
             text = (a.inner_text() or "").strip().replace("\n", " ")
-            if any(k in (href + text).lower() for k in ("randevu", "appointment", "booking")):
+            if any(k in (href + text).lower() for k in ("randevu", "booking")):
                 print(f"- {text[:60]!r} -> {href}")
         links = [a.get_attribute("href") for a in page.query_selector_all("a")]
         target = next((h for h in links if h and "randevu" in h.lower()), None)
