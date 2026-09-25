@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 import sys
 import tempfile
 import unittest
@@ -74,10 +75,15 @@ class EvaluateTests(unittest.TestCase):
         alerts2, _ = self.ev([rec()], st, now=1060)
         self.assertEqual(alerts2, [])
 
-    def test_ignores_other_countries(self):
-        alerts, st = self.ev([rec(mission="deu"), rec(country="gbr"), rec(mission="hun", status="closed")])
+    def test_ignores_non_schengen_other_city_other_source(self):
+        alerts, st = self.ev([
+            rec(mission="gbr"),                 # Schengen değil
+            rec(mission="fra", center="Ankara"),  # İstanbul değil
+            rec(country="gbr"),                 # başka ülkeden başvuru
+            rec(mission="nld", status="closed"),
+        ])
         self.assertEqual(alerts, [])
-        self.assertEqual(len(st), 1)  # sadece hun/closed takip ediliyor
+        self.assertEqual(len(st), 1)  # sadece nld/closed takip ediliyor
 
     def test_closed_then_open_alerts_again(self):
         _, st = self.ev([rec()])
@@ -85,10 +91,29 @@ class EvaluateTests(unittest.TestCase):
         alerts, _ = self.ev([rec()], st)
         self.assertEqual(len(alerts), 1)
 
-    def test_waitlist_and_hungary(self):
-        alerts, _ = self.ev([rec(mission="HUN", center="Ankara", status="waitlist_open")])
-        self.assertEqual(alerts[0].target, "Macaristan")
+    def test_waitlist_and_country_label(self):
+        alerts, _ = self.ev([rec(mission="NLD", center="Istanbul Beyoglu", status="waitlist_open")])
+        self.assertEqual(alerts[0].target, "🇳🇱 Hollanda")
         self.assertIn("BEKLEME", alerts[0].title)
+
+    def test_country_names_from_other_api(self):
+        alerts, _ = self.ev([{"source_country": "Turkiye", "mission_country": "France",
+                              "center_name": "İstanbul", "appointment_date": "2026-11-02"}])
+        self.assertEqual(alerts[0].target, "🇫🇷 Fransa")
+
+    def test_stale_open_ignored(self):
+        now = 1_800_000_000.0
+        stale = datetime.fromtimestamp(now - 13 * 3600, timezone.utc).isoformat()
+        fresh = datetime.fromtimestamp(now - 600, timezone.utc).isoformat().replace("+00:00", "Z")
+        alerts, _ = self.ev([rec(mission="fra", last_checked_at=stale),
+                             rec(mission="ita", last_checked_at=fresh)], now=now)
+        self.assertEqual([a.target for a in alerts], ["🇮🇹 İtalya"])
+
+    def test_exclude(self):
+        cfg = dict(CONFIG)
+        cfg["targets"] = [{"name": "x", "codes": ["schengen"], "exclude": ["Almanya"]}]
+        alerts, _ = self.ev([rec(mission="deu"), rec(mission="esp")], cfg=cfg)
+        self.assertEqual([a.target for a in alerts], ["🇪🇸 İspanya"])
 
     def test_reminder(self):
         _, st = self.ev([rec()], now=0)
@@ -153,13 +178,13 @@ class RunOnceTests(unittest.TestCase):
         return rc, n
 
     def test_end_to_end(self):
-        rc, n = self.run_with(visasbot(rec(mission="hun", center="Istanbul")))
+        rc, n = self.run_with(visasbot(rec(mission="aut", center="Istanbul")))
         self.assertEqual(rc, 0)
         n.assert_called_once()
         subject, body = n.call_args.args[:2]
-        self.assertIn("Macaristan", subject)
+        self.assertIn("Avusturya", subject)
         self.assertIn("Istanbul", body)
-        rc, n = self.run_with(visasbot(rec(mission="hun", center="Istanbul")))
+        rc, n = self.run_with(visasbot(rec(mission="aut", center="Istanbul")))
         n.assert_not_called()
 
     def test_failed_notification_retries_next_run(self):
@@ -177,6 +202,14 @@ class RunOnceTests(unittest.TestCase):
         self.assertEqual(calls, 1)
         _, n = self.run_with(visasbot())
         self.assertIn("tekrar çalışıyor", n.call_args.args[0])
+
+
+    def test_report(self):
+        with mock.patch.object(checker, "http_get",
+                               lambda u, t: json.dumps(visasbot(rec(mission="fra"), rec(mission="gbr")))):
+            text = checker.coverage_report(checker.DEFAULT_CONFIG)
+        self.assertIn("🇫🇷 Fransa", text)
+        self.assertIn("| ✅ |", text)
 
 
 class NotifierTests(unittest.TestCase):
@@ -203,6 +236,16 @@ class NotifierTests(unittest.TestCase):
             self.assertEqual(checker.notify("konu", "gövde"), 1)
         msg = smtp.return_value.__enter__.return_value.send_message.call_args.args[0]
         self.assertEqual(msg["To"], "a@gmail.com")
+        self.assertEqual(msg["Importance"], "High")
+
+    def test_starttls(self):
+        env = {"SMTP_USER": "a@example.com", "SMTP_PASSWORD": "p",
+               "SMTP_HOST": "smtp.example.com", "SMTP_PORT": "587"}
+        with mock.patch.dict("os.environ", env, clear=True), \
+                mock.patch("smtplib.SMTP") as smtp:
+            self.assertEqual(checker.notify("konu", "gövde"), 1)
+        smtp.assert_called_once_with("smtp.example.com", 587, timeout=30)
+        smtp.return_value.__enter__.return_value.starttls.assert_called_once()
 
 
 if __name__ == "__main__":

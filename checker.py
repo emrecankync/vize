@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Yunanistan / Macaristan vize randevu takipçisi.
+"""Schengen vize randevu takipçisi.
 
 Randevu kaynaklarını kontrol eder, yeni açılan randevu olursa e-posta,
 Telegram ve/veya ntfy (telefon bildirimi) ile haber verir.
@@ -10,6 +10,7 @@ Kullanım:
     python checker.py                 # bir kez kontrol et
     python checker.py --loop 300      # 5 dakikada bir sürekli kontrol et
     python checker.py --test-notify   # bildirim kanallarını test et
+    python checker.py --report        # kaynaklar hangi ülkeleri kapsıyor?
 """
 
 from __future__ import annotations
@@ -49,6 +50,40 @@ STATUS_LABELS = {
     "page": "SAYFA UYARISI",
 }
 
+# Schengen ülkeleri: (ISO alpha-3, alpha-2, İngilizce ad, Türkçe ad, bayrak)
+SCHENGEN = [
+    ("aut", "at", "Austria", "Avusturya", "🇦🇹"),
+    ("bel", "be", "Belgium", "Belçika", "🇧🇪"),
+    ("bgr", "bg", "Bulgaria", "Bulgaristan", "🇧🇬"),
+    ("hrv", "hr", "Croatia", "Hırvatistan", "🇭🇷"),
+    ("cze", "cz", "Czechia", "Çekya", "🇨🇿"),
+    ("dnk", "dk", "Denmark", "Danimarka", "🇩🇰"),
+    ("est", "ee", "Estonia", "Estonya", "🇪🇪"),
+    ("fin", "fi", "Finland", "Finlandiya", "🇫🇮"),
+    ("fra", "fr", "France", "Fransa", "🇫🇷"),
+    ("deu", "de", "Germany", "Almanya", "🇩🇪"),
+    ("grc", "gr", "Greece", "Yunanistan", "🇬🇷"),
+    ("hun", "hu", "Hungary", "Macaristan", "🇭🇺"),
+    ("isl", "is", "Iceland", "İzlanda", "🇮🇸"),
+    ("ita", "it", "Italy", "İtalya", "🇮🇹"),
+    ("lva", "lv", "Latvia", "Letonya", "🇱🇻"),
+    ("lie", "li", "Liechtenstein", "Lihtenştayn", "🇱🇮"),
+    ("ltu", "lt", "Lithuania", "Litvanya", "🇱🇹"),
+    ("lux", "lu", "Luxembourg", "Lüksemburg", "🇱🇺"),
+    ("mlt", "mt", "Malta", "Malta", "🇲🇹"),
+    ("nld", "nl", "Netherlands", "Hollanda", "🇳🇱"),
+    ("nor", "no", "Norway", "Norveç", "🇳🇴"),
+    ("pol", "pl", "Poland", "Polonya", "🇵🇱"),
+    ("prt", "pt", "Portugal", "Portekiz", "🇵🇹"),
+    ("rou", "ro", "Romania", "Romanya", "🇷🇴"),
+    ("svk", "sk", "Slovakia", "Slovakya", "🇸🇰"),
+    ("svn", "si", "Slovenia", "Slovenya", "🇸🇮"),
+    ("esp", "es", "Spain", "İspanya", "🇪🇸"),
+    ("swe", "se", "Sweden", "İsveç", "🇸🇪"),
+    ("che", "ch", "Switzerland", "İsviçre", "🇨🇭"),
+]
+EXTRA_ALIASES = {"cze": ["czech republic"], "nld": ["the netherlands", "holland"]}
+
 
 def log(msg: str) -> None:
     print(f"[{datetime.now(timezone.utc):%Y-%m-%d %H:%M:%S}Z] {msg}", flush=True)
@@ -61,6 +96,36 @@ def norm(text: object) -> str:
     s = unicodedata.normalize("NFKD", s)
     s = "".join(c for c in s if not unicodedata.combining(c))
     return re.sub(r"\s+", " ", s).strip()
+
+
+def _country_index() -> dict[str, tuple]:
+    idx = {}
+    for row in SCHENGEN:
+        for alias in (*row[:4], *EXTRA_ALIASES.get(row[0], [])):
+            idx[norm(alias)] = row
+    return idx
+
+
+COUNTRY_INDEX = _country_index()
+
+
+def country_label(code: str) -> str:
+    row = COUNTRY_INDEX.get(norm(code))
+    return f"{row[4]} {row[3]}" if row else code.upper()
+
+
+def expand_codes(codes: list[str]) -> set[str]:
+    """"schengen" kelimesini tüm Schengen ülkelerinin kod/adlarına açar."""
+    out: set[str] = set()
+    for c in codes:
+        if norm(c) == "schengen":
+            out.update(COUNTRY_INDEX)
+        else:
+            row = COUNTRY_INDEX.get(norm(c))
+            out.update(norm(a) for a in (row[:4] if row else [c]))
+            if row:
+                out.update(norm(a) for a in EXTRA_ALIASES.get(row[0], []))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -79,6 +144,7 @@ class Appointment:
     status: str
     date: str = ""
     link: str = ""
+    checked_at: str = ""
 
     @property
     def key(self) -> str:
@@ -94,9 +160,13 @@ class Target:
     codes: list[str]
     cities: list[str] = field(default_factory=list)
     visa_types: list[str] = field(default_factory=list)
+    exclude: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self._codes = expand_codes(self.codes) - expand_codes(self.exclude)
 
     def matches(self, appt: Appointment) -> bool:
-        if norm(appt.mission) not in {norm(c) for c in self.codes}:
+        if norm(appt.mission) not in self._codes:
             return False
         if self.cities and not any(norm(c) in norm(appt.center) for c in self.cities):
             return False
@@ -184,7 +254,21 @@ def parse_record(record: dict, source: str) -> Appointment:
         status=status,
         date=date,
         link=_first(record, "book_now_link", "link", "url"),
+        checked_at=_first(record, "last_checked_at", "last_checked", "updated_at"),
     )
+
+
+def age_hours(ts: str, now: float) -> float | None:
+    """ISO zaman damgasının kaç saat önce olduğunu döner (okunamazsa None)."""
+    if not ts:
+        return None
+    try:
+        dt = datetime.fromisoformat(ts.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return (now - dt.timestamp()) / 3600
 
 
 def fetch_api(src: dict, timeout: float) -> list[Appointment]:
@@ -281,6 +365,9 @@ def send_email(subject: str, body: str) -> bool:
     msg["Subject"] = subject
     msg["From"] = os.environ.get("MAIL_FROM") or user
     msg["To"] = to
+    # Outlook'ta "Yüksek önem" (kırmızı ünlem) olarak görünsün.
+    msg["Importance"] = "High"
+    msg["X-Priority"] = "1"
     msg.set_content(body)
     ctx = ssl.create_default_context()
     if port == 465:
@@ -369,6 +456,7 @@ def evaluate(
     wanted = {norm(s) for s in settings.get("notify_statuses", ["open", "waitlist_open"])}
     remind_s = float(settings.get("remind_every_hours", 0)) * 3600
     targets = [Target(**t) for t in cfg.get("targets", [])]
+    max_age = float(settings.get("max_age_hours", 0))
 
     # Aynı randevu birden çok kaynakta varsa "açık" olan kaydı kullan.
     merged: dict[str, tuple[Appointment, Target]] = {}
@@ -378,6 +466,9 @@ def evaluate(
         target = next((t for t in targets if t.matches(a)), None)
         if target is None:
             continue
+        age = age_hours(a.checked_at, now)
+        if max_age > 0 and age is not None and age > max_age and a.status in wanted:
+            continue  # kaynak bu randevuyu uzun süredir kontrol etmemiş, güvenilmez
         if a.key not in merged or (a.status in wanted and merged[a.key][0].status not in wanted):
             merged[a.key] = (a, target)
 
@@ -396,8 +487,8 @@ def evaluate(
                 label = STATUS_LABELS.get(a.status, a.status.upper())
                 alerts.append(
                     Alert(
-                        target=target.name,
-                        title=f"{target.name} - {a.center or '?'}: {label}",
+                        target=country_label(a.mission),
+                        title=f"{country_label(a.mission)} - {a.center or '?'}: {label}",
                         details=[
                             f"Kategori: {a.visa_category}" if a.visa_category else "",
                             f"Vize türü: {a.visa_type}" if a.visa_type else "",
@@ -521,19 +612,62 @@ def run_once(config_path: Path, state_path: Path) -> int:
     return 0
 
 
+def coverage_report(config_path: Path) -> str:
+    """Kaynakların hangi ülke/şehir için ne kadar güncel veri verdiğini özetler."""
+    cfg = load_config(config_path)
+    settings = cfg.get("settings", {})
+    timeout = float(settings.get("timeout", 30))
+    countries = {norm(c) for c in _as_list(settings.get("source_country", ["tur"]))}
+    targets = [Target(**t) for t in cfg.get("targets", [])]
+    now = time.time()
+    out = ["# Kaynak kapsam raporu", ""]
+    for src in cfg.get("api", []):
+        if not src.get("enabled", True):
+            continue
+        out.append(f"## {src['name']}")
+        try:
+            appts = fetch_api(src, timeout)
+        except Exception as e:  # noqa: BLE001
+            out += [f"HATA: {type(e).__name__}: {e}", ""]
+            continue
+        mine = [a for a in appts if not countries or norm(a.country) in countries]
+        out.append(f"Toplam kayıt: {len(appts)}, başvuru ülkesi eşleşen: {len(mine)}")
+        out += ["", "| Hedefe uyuyor | Ülke | Merkez | Durum | Kontrol (saat önce) | Tarih |",
+                "|---|---|---|---|---|---|"]
+        for a in sorted(mine, key=lambda a: (norm(a.mission), norm(a.center), a.key)):
+            age = age_hours(a.checked_at, now)
+            hit = "✅" if any(t.matches(a) for t in targets) else ""
+            age_s = f"{age:.1f}" if age is not None else "?"
+            out.append(
+                f"| {hit} | {country_label(a.mission)} | {a.center} | {a.status} | {age_s} | {a.date} |"
+            )
+        out.append("")
+    return "\n".join(out)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
     ap.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     ap.add_argument("--state", type=Path, default=DEFAULT_STATE)
     ap.add_argument("--loop", type=int, metavar="SANIYE", help="sürekli çalış, her N saniyede kontrol et")
     ap.add_argument("--test-notify", action="store_true", help="test bildirimi gönder ve çık")
+    ap.add_argument("--report", action="store_true", help="kaynakların kapsamını raporla ve çık")
     args = ap.parse_args(argv)
+
+    if args.report:
+        text = coverage_report(args.config)
+        print(text)
+        summary = os.environ.get("GITHUB_STEP_SUMMARY")
+        if summary:
+            with open(summary, "a", encoding="utf-8") as f:
+                f.write(text + "\n")
+        return 0
 
     if args.test_notify:
         sent = notify(
             "✅ Vize takip sistemi test bildirimi",
-            "Bu bir test mesajıdır. Bunu görüyorsanız, Yunanistan veya Macaristan "
-            "randevusu açıldığında size bu kanaldan haber verilecek.",
+            "Bu bir test mesajıdır. Bunu görüyorsanız, takip edilen Schengen "
+            "randevularından biri açıldığında size bu kanaldan haber verilecek.",
         )
         return 0 if sent else 1
 

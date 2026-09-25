@@ -1,4 +1,4 @@
-# Vize randevu takip ayarları
+# Schengen vize randevu takip ayarları
 # Bu dosyayı GitHub üzerinden düzenleyip kaydetmeniz yeterli; bir sonraki
 # kontrolde yeni ayarlar kullanılır.
 
@@ -10,6 +10,10 @@ source_country = ["tur", "turkiye", "türkiye", "turkey"]
 #   open          -> randevu açık
 #   waitlist_open -> bekleme listesi açık
 notify_statuses = ["open", "waitlist_open"]
+
+# Kaynak bir randevuyu en son bu kadar saatten daha önce kontrol ettiyse
+# "açık" bilgisine güvenme (eski/bayat veri için bildirim atma). 0 = kapalı.
+max_age_hours = 12
 
 # Randevu açık kalmaya devam ederse kaç saatte bir tekrar hatırlatılsın.
 # 0 = sadece ilk açıldığında haber ver.
@@ -24,21 +28,19 @@ timeout = 30
 
 
 # ---------------------------------------------------------------------------
-# Takip edilen ülkeler. "cities" boş bırakılırsa tüm şehirler takip edilir.
-# Sadece belirli şehirler için örnek:  cities = ["istanbul", "izmir"]
-# "visa_types" boş bırakılırsa tüm vize türleri; örnek: ["tourism", "turistik"]
+# Neyi takip ediyoruz?
+#   codes      : "schengen" = tüm Schengen ülkeleri. Sadece bazıları için örn.
+#                ["fra", "nld", "ita"] veya ["Fransa", "Hollanda"] yazabilirsiniz.
+#   exclude    : istemediğiniz ülkeler, örn. ["deu"]
+#   cities     : başvuru merkezi şehri (boş = tüm şehirler)
+#   visa_types : boş = tüm vize türleri; örn. ["tourism", "turist"]
 # ---------------------------------------------------------------------------
 
 [[targets]]
-name = "Yunanistan"
-codes = ["grc", "gr", "greece", "yunanistan"]
-cities = []
-visa_types = []
-
-[[targets]]
-name = "Macaristan"
-codes = ["hun", "hu", "hungary", "macaristan"]
-cities = []
+name = "Schengen - İstanbul"
+codes = ["schengen"]
+exclude = []
+cities = ["istanbul"]
 visa_types = []
 
 
@@ -61,26 +63,17 @@ name = "schengenvisaappointments"
 url = "https://api.schengenvisaappointments.com/api/visa-list/?format=json"
 enabled = true
 
-# Sayfa izleme örnekleri. Kullanmak için enabled = true yapın ve
-# kalıpları sayfada gerçekten gördüğünüz yazılara göre düzenleyin.
+# Sayfa izleme (isteğe bağlı). Giriş gerektirmeyen bir sayfayı izler.
 #
 # mode = "appears"    -> patterns içindeki yazılardan biri sayfada ÇIKINCA haber ver
 # mode = "disappears" -> patterns içindeki yazıların hepsi sayfadan KAYBOLUNCA haber ver
 #                        (ör. "Uygun randevu bulunmamaktadır" yazısı kalkınca)
 # mode = "changes"    -> sayfanın görünen metni her DEĞİŞTİĞİNDE haber ver
-
-[[page]]
-name = "AS Visa - Macaristan duyuru sayfası"
-target = "Macaristan"
-url = "https://www.as-visa.com/Country.aspx?ID=20"
-mode = "changes"
-enabled = false
-
-# Not: Adresi ve yazıları tarayıcınızda randevu sayfasını açıp kontrol edin.
-[[page]]
-name = "Kosmos Vize - Yunanistan"
-target = "Yunanistan"
-url = "https://www.kosmosvize.com/"
-mode = "disappears"
-patterns = ["uygun randevu bulunmamaktadır", "no appointment available"]
-enabled = false
+#
+# [[page]]
+# name = "Örnek sayfa"
+# target = "Ülke adı"
+# url = "https://..."
+# mode = "disappears"
+# patterns = ["uygun randevu bulunmamaktadır"]
+# enabled = true

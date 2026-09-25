@@ -10,6 +10,10 @@ on:
         description: "Sadece test bildirimi gönder"
         type: boolean
         default: false
+      report:
+        description: "Sadece kaynak kapsam raporu çıkar (hangi ülkeler için veri var?)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -45,8 +49,12 @@ jobs:
         if: ${{ inputs.test_notify }}
         run: python checker.py --test-notify
 
+      - name: Kapsam raporu
+        if: ${{ inputs.report }}
+        run: python checker.py --report
+
       - name: Önceki durumu yükle
-        if: ${{ !inputs.test_notify }}
+        if: ${{ !inputs.test_notify && !inputs.report }}
         uses: actions/cache/restore@v4
         with:
           path: state
@@ -54,11 +62,11 @@ jobs:
           restore-keys: vize-state-
 
       - name: Randevuları kontrol et
-        if: ${{ !inputs.test_notify }}
+        if: ${{ !inputs.test_notify && !inputs.report }}
         run: python checker.py
 
       - name: Durumu kaydet
-        if: ${{ always() && !inputs.test_notify }}
+        if: ${{ always() && !inputs.test_notify && !inputs.report }}
         uses: actions/cache/save@v4
         with:
           path: state
