@@ -17,6 +17,7 @@ on:
 
 permissions:
   contents: read
+  issues: write # randevu açılınca issue açıp GitHub'ın e-posta atmasını sağlar
   actions: write # zamanlanmış görevin 60 gün sonra kapanmasını önlemek için
 
 concurrency:
@@ -28,6 +29,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     env:
+      # Randevu bildirimini repoda issue olarak aç; GitHub size e-posta atar.
+      GITHUB_ISSUE_NOTIFY: "true"
+      GITHUB_TOKEN: ${{ github.token }}
       SMTP_USER: ${{ secrets.SMTP_USER }}
       SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
       SMTP_HOST: ${{ secrets.SMTP_HOST }}

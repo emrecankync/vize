@@ -158,10 +158,31 @@ class PageTests(unittest.TestCase):
         self.assertTrue(a)
 
 
+API_ONLY_CONFIG = """
+[settings]
+source_country = ["tur"]
+notify_statuses = ["open", "waitlist_open"]
+max_age_hours = 12
+remind_every_hours = 6
+error_alert_after = 18
+
+[[targets]]
+name = "Schengen - İstanbul"
+codes = ["schengen"]
+cities = ["istanbul"]
+
+[[api]]
+name = "visasbot"
+url = "https://example.invalid/api"
+"""
+
+
 class RunOnceTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.state = Path(self.tmp.name) / "state.json"
+        self.config = Path(self.tmp.name) / "config.toml"
+        self.config.write_text(API_ONLY_CONFIG)
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -174,7 +195,7 @@ class RunOnceTests(unittest.TestCase):
 
         with mock.patch.object(checker, "http_get", fake_get), \
                 mock.patch.object(checker, "notify", return_value=sent) as n:
-            rc = checker.run_once(checker.DEFAULT_CONFIG, self.state)
+            rc = checker.run_once(self.config, self.state)
         return rc, n
 
     def test_end_to_end(self):
@@ -193,7 +214,7 @@ class RunOnceTests(unittest.TestCase):
         n.assert_called_once()
 
     def test_all_sources_down_alerts_once(self):
-        limit = CONFIG["settings"]["error_alert_after"]
+        limit = 18
         calls = 0
         for _ in range(limit + 3):
             rc, n = self.run_with(OSError("down"))
@@ -207,12 +228,113 @@ class RunOnceTests(unittest.TestCase):
     def test_report(self):
         with mock.patch.object(checker, "http_get",
                                lambda u, t: json.dumps(visasbot(rec(mission="fra"), rec(mission="gbr")))):
-            text = checker.coverage_report(checker.DEFAULT_CONFIG)
+            text = checker.coverage_report(self.config)
         self.assertIn("🇫🇷 Fransa", text)
         self.assertIn("| ✅ |", text)
 
 
+FIX = Path(__file__).parent / "fixtures"
+
+
+class VisaCatcherTests(unittest.TestCase):
+    def setUp(self):
+        self.now = 1_800_000_000.0
+        self.page = (FIX / "visacatcher_istanbul.html").read_text()
+        self.appts = checker.parse_visacatcher(self.page, "İstanbul", "vc", "https://x", self.now)
+
+    def test_only_tracked_list_parsed(self):
+        names = [a.mission for a in self.appts]
+        self.assertEqual(names, ["Belçika", "Çekya", "Fransa", "Hırvatistan", "İsviçre", "Karadağ", "Ukrayna"])
+
+    def test_statuses(self):
+        st = {a.mission: (a.status, a.date) for a in self.appts}
+        self.assertEqual(st["Belçika"], ("closed", ""))
+        self.assertEqual(st["İsviçre"], ("waitlist_open", ""))
+        self.assertEqual(st["Fransa"], ("open", "14/10/2026"))
+
+    def test_checked_at_relative(self):
+        self.assertAlmostEqual(checker.age_hours(self.appts[0].checked_at, self.now), 5 / 60, places=3)
+
+    def test_evaluate_filters_non_schengen(self):
+        alerts, st = checker.evaluate(self.appts, CONFIG, {}, self.now)
+        titles = sorted(a.title for a in alerts)
+        self.assertEqual(len(alerts), 2)
+        self.assertIn("🇫🇷 Fransa - İstanbul: AÇIK", titles)
+        self.assertIn("🇨🇭 İsviçre - İstanbul: BEKLEME LİSTESİ AÇIK", titles)
+        self.assertFalse(any("Karadağ" in k or "ukrayna" in k for k in st))
+
+    def test_waitlist_not_reminded_but_open_is(self):
+        _, st = checker.evaluate(self.appts, CONFIG, {}, self.now)
+        later = self.now + 7 * 3600
+        appts = checker.parse_visacatcher(self.page, "İstanbul", "vc", "https://x", later)
+        alerts, _ = checker.evaluate(appts, CONFIG, {"appointments": st}, later)
+        self.assertEqual([a.target for a in alerts], ["🇫🇷 Fransa"])
+        self.assertTrue(alerts[0].reminder)
+
+    def test_structure_change_raises(self):
+        with self.assertRaises(ValueError):
+            checker.parse_visacatcher("<html>bakım</html>", "İstanbul", "vc", "u", self.now)
+
+    def test_unknown_status_not_alerted(self):
+        self.assertEqual(checker.classify_status("Yakında"), ("unknown", ""))
+
+
+class VizetakipTests(unittest.TestCase):
+    CARD = (FIX / "vizetakip_card.html").read_text()
+
+    def page(self, *cards):
+        return '<div class="appt-grid">' + "".join(cards) + "</div>"
+
+    def card(self, country="İtalya", city="Gaziantep", found="2026-09-24T19:25:50.386Z"):
+        c = self.CARD.replace(">İtalya</a>", f">{country}</a>").replace(">Gaziantep<", f">{city}<")
+        return c.replace("2026-09-24T19:25:50.386Z", found)
+
+    def test_parse_real_card(self):
+        [slot] = checker.parse_vizetakip(self.page(self.CARD))
+        self.assertEqual((slot.country, slot.city, slot.visa_type, slot.date),
+                         ("İtalya", "Gaziantep", "Turistik", "22/10/2026"))
+        self.assertEqual(slot.found_at, "2026-09-24T19:25:50.386Z")
+
+    def test_structure_change_raises(self):
+        with self.assertRaises(ValueError):
+            checker.parse_vizetakip("<html></html>")
+
+    def test_feed_alerts_new_istanbul_only(self):
+        now = datetime(2026, 9, 25, 12, 0, tzinfo=timezone.utc).timestamp()
+        targets = [checker.Target(**t) for t in CONFIG["targets"]]
+        src = {"name": "vt", "url": "https://vizetakip.app/"}
+        slots = checker.parse_vizetakip(self.page(
+            self.card("Fransa", "İstanbul", "2026-09-25T11:55:00Z"),
+            self.card("İtalya", "Gaziantep", "2026-09-25T11:56:00Z"),
+            self.card("Hollanda", "İstanbul", "2026-09-24T08:00:00Z"),  # eski
+        ))
+        alerts, st = checker.feed_alerts(src, slots, targets, {}, now)
+        self.assertEqual([a.target for a in alerts], ["🇫🇷 Fransa"])
+        self.assertEqual(st["last_seen"], "2026-09-25T11:56:00Z")
+        alerts, _ = checker.feed_alerts(src, slots, targets, st, now + 600)
+        self.assertEqual(alerts, [])
+
+
 class NotifierTests(unittest.TestCase):
+    def test_github_issue(self):
+        env = {"GITHUB_ISSUE_NOTIFY": "true", "GITHUB_TOKEN": "t",
+               "GITHUB_REPOSITORY": "o/r", "GITHUB_REPOSITORY_OWNER": "o"}
+        with mock.patch.dict("os.environ", env, clear=True), \
+                mock.patch.object(checker, "http_post") as post:
+            self.assertEqual(checker.notify("🔔 Vize", "gövde"), 1)
+        url, data, headers = post.call_args.args
+        self.assertEqual(url, "https://api.github.com/repos/o/r/issues")
+        payload = json.loads(data)
+        self.assertEqual(payload["title"], "🔔 Vize")
+        self.assertEqual(payload["assignees"], ["o"])
+        self.assertTrue(payload["body"].startswith("@o"))
+        self.assertEqual(headers["Authorization"], "Bearer t")
+
+    def test_github_issue_disabled_without_flag(self):
+        env = {"GITHUB_TOKEN": "t", "GITHUB_REPOSITORY": "o/r"}
+        with mock.patch.dict("os.environ", env, clear=True):
+            self.assertEqual(checker.notify("s", "b"), 0)
+
     def test_no_channels_configured(self):
         with mock.patch.dict("os.environ", {}, clear=True):
             self.assertEqual(checker.notify("s", "b"), 0)

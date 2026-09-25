@@ -316,6 +316,151 @@ def check_page(src: dict, text: str, prev: dict | None) -> tuple[bool, dict, str
 
 
 # ---------------------------------------------------------------------------
+# Kaynak: Visa Catcher şehir sayfası (ülke başına anlık durum)
+# ---------------------------------------------------------------------------
+
+FLAG_RE = re.compile(r"[\U0001F1E6-\U0001F1FF]{2}")
+DATE_RE = re.compile(r"\b\d{1,2}[./]\d{1,2}[./]\d{4}\b")
+
+
+def _relative_to_iso(text: str, now: float) -> str:
+    """'az önce', '5 dakika önce', '2 saat önce' -> ISO zaman damgası."""
+    t = norm(text)
+    if "az once" in t or "simdi" in t:
+        secs = 0.0
+    else:
+        m = re.search(r"(\d+)\s*(saniye|sn|dakika|dk|saat|gun)", t)
+        if not m:
+            return ""
+        n = float(m.group(1))
+        secs = n * {"saniye": 1, "sn": 1, "dakika": 60, "dk": 60, "saat": 3600, "gun": 86400}[m.group(2)]
+    return datetime.fromtimestamp(now - secs, timezone.utc).isoformat()
+
+
+def _split_country(chunk: str) -> tuple[str, str]:
+    """'İsviçre Bekleme listesi açık BEKLEME' -> ('İsviçre', 'Bekleme listesi açık BEKLEME')."""
+    words = chunk.split()
+    for n in (3, 2, 1):
+        if norm(" ".join(words[:n])) in COUNTRY_INDEX:
+            return " ".join(words[:n]), " ".join(words[n:])
+    return (words[0] if words else ""), " ".join(words[1:])
+
+
+def classify_status(text: str) -> tuple[str, str]:
+    """Durum metnini (status, tarih) çiftine çevirir."""
+    t = norm(text)
+    date_m = DATE_RE.search(text)
+    if "musait tarih yok" in t or re.search(r"\byok$", t):
+        return "closed", ""
+    if "bekleme" in t or "waitlist" in t:
+        return "waitlist_open", ""
+    if date_m or "musait" in t or re.search(r"\b(var|acik|open|available)\b", t):
+        return "open", date_m.group(0) if date_m else ""
+    return "unknown", ""
+
+
+def parse_visacatcher(page: str, city: str, source: str, url: str, now: float) -> list[Appointment]:
+    text = visible_text(page)
+    section = text[_orig_index(text, "takip edilen ülkeler"):_orig_index(text, "Diğer şehirler")]
+    checked = ""
+    m = re.search(r"Son kontrol:\s*([^.]+)", text)
+    if m:
+        checked = _relative_to_iso(m.group(1), now)
+    chunks = [c.strip() for c in FLAG_RE.split(section)[1:] if c.strip()]
+    out = []
+    for chunk in chunks:
+        name, rest = _split_country(chunk)
+        status, date = classify_status(rest)
+        out.append(Appointment(source=source, country="tur", mission=name, center=city,
+                               visa_category="", visa_type="", status=status, date=date,
+                               link=url, checked_at=checked))
+    if not out:
+        raise ValueError("Visa Catcher sayfasında hiç ülke bulunamadı")
+    return out
+
+
+def _orig_index(text: str, needle: str) -> int:
+    i = text.find(needle)
+    if i < 0:
+        i = text.lower().find(needle.lower())
+    if i < 0:
+        raise ValueError(f"Visa Catcher sayfa yapısı değişmiş ('{needle}' bulunamadı)")
+    return i
+
+
+def fetch_visacatcher(src: dict, timeout: float, now: float) -> list[Appointment]:
+    return parse_visacatcher(http_get(src["url"], timeout), src.get("city", ""),
+                             src.get("name", src["url"]), src["url"], now)
+
+
+# ---------------------------------------------------------------------------
+# Kaynak: vizetakip.app (bulunan randevuların akışı)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class FoundSlot:
+    country: str
+    city: str
+    visa_type: str
+    date: str
+    found_at: str
+
+
+def parse_vizetakip(page: str) -> list[FoundSlot]:
+    if "appt-grid" not in page:
+        raise ValueError("vizetakip.app sayfa yapısı değişmiş (appt-grid yok)")
+
+    def grab(pattern: str, block: str) -> str:
+        m = re.search(pattern, block, re.S)
+        return html.unescape(re.sub(r"<[^>]+>", " ", m.group(1))).strip() if m else ""
+
+    out = []
+    for block in re.findall(r'<article class="appt-card">(.*?)</article>', page, re.S):
+        out.append(FoundSlot(
+            country=grab(r'class="appt-country"[^>]*>(.*?)</a>', block),
+            city=grab(r'class="appt-city"[^>]*>(.*?)</span>', block),
+            visa_type=grab(r'class="appt-type"[^>]*>(.*?)</span>', block),
+            date=re.sub(r"\s+", " ", grab(r'class="appt-date-row"[^>]*>(.*?)</div>', block)),
+            found_at=(re.search(r'class="appt-meta".*?<time datetime="([^"]+)"', block, re.S)
+                      or [None, ""])[1],
+        ))
+    return out
+
+
+def feed_alerts(src: dict, slots: list[FoundSlot], targets: list["Target"], state: dict,
+                now: float) -> tuple[list[Alert], dict]:
+    """Son görülen zamandan sonra bulunan ve hedefe uyan randevular için bildirim üretir."""
+    first_run = "last_seen" not in state
+    # İlk çalışmada eski geçmişi bildirme; sadece son 30 dakikada bulunanlar.
+    last_seen = state.get("last_seen") or datetime.fromtimestamp(now - 1800, timezone.utc).isoformat()
+    last_ts = age_hours(last_seen, now)
+    newest = last_seen
+    groups: dict[tuple[str, str], list[FoundSlot]] = {}
+    for s in slots:
+        age = age_hours(s.found_at, now)
+        if age is None or last_ts is None or age >= last_ts:
+            continue
+        if age_hours(newest, now) is None or age < age_hours(newest, now):
+            newest = s.found_at
+        probe = Appointment(source="", country="tur", mission=s.country, center=s.city,
+                            visa_category="", visa_type=s.visa_type, status="open")
+        if any(t.matches(probe) for t in targets):
+            groups.setdefault((s.country, s.city), []).append(s)
+    alerts = []
+    for (country, city), items in groups.items():
+        alerts.append(Alert(
+            target=country_label(country),
+            title=f"{country_label(country)} - {city}: YENİ RANDEVU BULUNDU",
+            details=[f"{s.visa_type}: {s.date}" for s in items] + [f"Kaynak: {src.get('name')}"],
+            link=src["url"],
+        ))
+    if first_run:
+        log(f"{src.get('name')}: ilk çalışma, geçmiş kayıtlar atlandı")
+    return alerts, {"last_seen": newest}
+
+
+# ---------------------------------------------------------------------------
 # Durum (daha önce bildirilenleri hatırlamak için)
 # ---------------------------------------------------------------------------
 
@@ -418,6 +563,31 @@ def send_ntfy(subject: str, body: str, link: str = "") -> bool:
     return True
 
 
+def send_github_issue(subject: str, body: str) -> bool:
+    """Repoda issue açar; GitHub repo sahibine e-posta bildirimi gönderir."""
+    if norm(os.environ.get("GITHUB_ISSUE_NOTIFY", "")) not in ("1", "true", "yes"):
+        return False
+    token = os.environ.get("GITHUB_TOKEN")
+    repo = os.environ.get("GITHUB_REPOSITORY")
+    if not (token and repo):
+        return False
+    user = os.environ.get("NOTIFY_GITHUB_USER") or os.environ.get("GITHUB_REPOSITORY_OWNER", "")
+    payload = {"title": subject[:250], "body": (f"@{user}\n\n" if user else "") + body}
+    if user:
+        payload["assignees"] = [user]
+    http_post(
+        f"https://api.github.com/repos/{repo}/issues",
+        json.dumps(payload).encode(),
+        {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "Content-Type": "application/json",
+            "User-Agent": "vize-randevu-takip",
+        },
+    )
+    return True
+
+
 def notify(subject: str, body: str, link: str = "") -> int:
     """Tüm yapılandırılmış kanallara gönderir; başarılı kanal sayısını döner."""
     sent = 0
@@ -425,6 +595,7 @@ def notify(subject: str, body: str, link: str = "") -> int:
         ("E-posta", lambda: send_email(subject, body)),
         ("Telegram", lambda: send_telegram(subject, body)),
         ("ntfy", lambda: send_ntfy(subject, body, link)),
+        ("GitHub issue", lambda: send_github_issue(subject, body)),
     ):
         try:
             if fn():
@@ -455,6 +626,7 @@ def evaluate(
     countries = {norm(c) for c in _as_list(settings.get("source_country", ["tur"]))}
     wanted = {norm(s) for s in settings.get("notify_statuses", ["open", "waitlist_open"])}
     remind_s = float(settings.get("remind_every_hours", 0)) * 3600
+    remind_statuses = {norm(x) for x in settings.get("remind_statuses", ["open"])}
     targets = [Target(**t) for t in cfg.get("targets", [])]
     max_age = float(settings.get("max_age_hours", 0))
 
@@ -481,7 +653,8 @@ def evaluate(
         if a.status in wanted:
             last = prev.get("notified_at") if prev.get("status") in wanted else None
             first = last is None
-            remind = not first and remind_s > 0 and now - float(last) >= remind_s
+            remind = (not first and remind_s > 0 and a.status in remind_statuses
+                      and now - float(last) >= remind_s)
             entry["notified_at"] = last
             if first or remind:
                 label = STATUS_LABELS.get(a.status, a.status.upper())
@@ -534,9 +707,40 @@ def run_once(config_path: Path, state_path: Path) -> int:
             errors.append(f"{src.get('name')}: {type(e).__name__}: {e}")
             log(f"HATA {src.get('name')}: {type(e).__name__}: {e}")
 
+    for src in cfg.get("visacatcher", []):
+        if not src.get("enabled", True):
+            continue
+        total_sources += 1
+        try:
+            got = fetch_visacatcher(src, timeout, now)
+            appts.extend(got)
+            ok_sources += 1
+            log(f"{src['name']}: {len(got)} ülke okundu")
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"{src.get('name')}: {type(e).__name__}: {e}")
+            log(f"HATA {src.get('name')}: {type(e).__name__}: {e}")
+
     alerts: list[Alert] = []
-    if ok_sources:
-        alerts, appt_state = evaluate(appts, cfg, state, now)
+    feed_state = state.setdefault("feeds", {})
+    targets = [Target(**t) for t in cfg.get("targets", [])]
+    for src in cfg.get("feed", []):
+        if not src.get("enabled", True):
+            continue
+        total_sources += 1
+        name = src.get("name", src["url"])
+        try:
+            slots = parse_vizetakip(http_get(src["url"], timeout))
+            got, feed_state[name] = feed_alerts(src, slots, targets, feed_state.get(name, {}), now)
+            alerts.extend(got)
+            ok_sources += 1
+            log(f"{name}: {len(slots)} kayıt okundu, {len(got)} yeni eşleşme")
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"{name}: {type(e).__name__}: {e}")
+            log(f"HATA {name}: {type(e).__name__}: {e}")
+
+    if appts:
+        status_alerts, appt_state = evaluate(appts, cfg, state, now)
+        alerts.extend(status_alerts)
         state["appointments"] = appt_state
         for key, v in appt_state.items():
             log(f"  {key} -> {v['status']} {v.get('date') or ''}".rstrip())
@@ -595,7 +799,7 @@ def run_once(config_path: Path, state_path: Path) -> int:
         link = next((a.link for a in alerts if a.link), "")
         if notify(subject, body, link) == 0:
             # Hiçbir kanal çalışmadıysa bir sonraki kontrolde tekrar denensin.
-            for section in ("appointments", "pages"):
+            for section in ("appointments", "pages", "feeds"):
                 if section in before:
                     state[section] = before[section]
                 else:
@@ -621,12 +825,14 @@ def coverage_report(config_path: Path) -> str:
     targets = [Target(**t) for t in cfg.get("targets", [])]
     now = time.time()
     out = ["# Kaynak kapsam raporu", ""]
-    for src in cfg.get("api", []):
+    sources = [(s, fetch_api) for s in cfg.get("api", [])] + [
+        (s, lambda src, t: fetch_visacatcher(src, t, now)) for s in cfg.get("visacatcher", [])]
+    for src, fetch in sources:
         if not src.get("enabled", True):
             continue
         out.append(f"## {src['name']}")
         try:
-            appts = fetch_api(src, timeout)
+            appts = fetch(src, timeout)
         except Exception as e:  # noqa: BLE001
             out += [f"HATA: {type(e).__name__}: {e}", ""]
             continue
@@ -641,6 +847,23 @@ def coverage_report(config_path: Path) -> str:
             out.append(
                 f"| {hit} | {country_label(a.mission)} | {a.center} | {a.status} | {age_s} | {a.date} |"
             )
+        out.append("")
+    for src in cfg.get("feed", []):
+        if not src.get("enabled", True):
+            continue
+        out.append(f"## {src['name']}")
+        try:
+            slots = parse_vizetakip(http_get(src["url"], timeout))
+        except Exception as e:  # noqa: BLE001
+            out += [f"HATA: {type(e).__name__}: {e}", ""]
+            continue
+        out += [f"Son bulunan {len(slots)} randevu:", "", "| Hedefe uyuyor | Ülke | Şehir | Tür | Tarih | Bulunma |",
+                "|---|---|---|---|---|---|"]
+        for sl in slots:
+            probe = Appointment(source="", country="tur", mission=sl.country, center=sl.city,
+                                visa_category="", visa_type=sl.visa_type, status="open")
+            hit = "✅" if any(t.matches(probe) for t in targets) else ""
+            out.append(f"| {hit} | {sl.country} | {sl.city} | {sl.visa_type} | {sl.date} | {sl.found_at} |")
         out.append("")
     return "\n".join(out)
 

@@ -18,6 +18,9 @@ max_age_hours = 12
 # Randevu açık kalmaya devam ederse kaç saatte bir tekrar hatırlatılsın.
 # 0 = sadece ilk açıldığında haber ver.
 remind_every_hours = 6
+# Hangi durumlar için hatırlatma yapılsın (bekleme listesi haftalarca açık
+# kalabildiği için varsayılan olarak sadece "open").
+remind_statuses = ["open"]
 
 # Tüm kaynaklar arka arkaya bu kadar kontrolde hata verirse
 # "sistem veri alamıyor" uyarısı gönderilir (10 dk aralıkla 18 = ~3 saat).
@@ -53,19 +56,30 @@ visa_types = []
 #            çıkınca / kaybolunca ya da sayfa değişince haber verir.
 # ---------------------------------------------------------------------------
 
-# Not (25.09.2026): İki adres de aynı işletmeye (visasbot.com) ait. Şu an
-# "VFS değişikliklerine uyum için yeniden inşa ediliyor" bakımında ve veri
-# vermiyor. Geri geldiğinde sistem otomatik olarak kullanmaya başlar ve
-# "tekrar çalışıyor" maili atar.
+# Ana kaynak: Visa Catcher İstanbul sayfası. İstanbul'daki VFS merkezlerinde
+# ~17 ülkenin (Belçika, Bulgaristan, Çekya, Estonya, Finlandiya, Fransa,
+# Hırvatistan, Hollanda, İsviçre, Letonya, Litvanya, Lüksemburg, Malta,
+# Slovenya...) anlık durumunu gösterir. Başka şehir için adresi değiştirin:
+#   /tr/ankara, /tr/izmir, /tr/antalya, /tr/gaziantep, /tr/trabzon
+[[visacatcher]]
+name = "Visa Catcher - İstanbul"
+url = "https://visacatcher.bot/tr/istanbul"
+city = "İstanbul"
+enabled = true
+
+# Yedek kaynak: vizetakip.app'in "son bulunan 50 randevu" listesi.
+# Şu an çoğunlukla Ankara/İzmir/Gaziantep kayıtları var; İstanbul kaydı
+# çıkarsa bildirilir.
+[[feed]]
+name = "vizetakip.app"
+url = "https://vizetakip.app/"
+enabled = true
+
+# Eski kaynak: visasbot.com Haziran 2026'dan beri bakımda, kapalı.
 [[api]]
 name = "visasbot"
 url = "https://api.visasbot.com/api/visa/list"
-enabled = true
-
-[[api]]
-name = "schengenvisaappointments"
-url = "https://api.schengenvisaappointments.com/api/visa-list/?format=json"
-enabled = true
+enabled = false
 
 # Sayfa izleme (isteğe bağlı). Giriş gerektirmeyen bir sayfayı izler.
 #
