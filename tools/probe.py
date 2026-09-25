@@ -37,6 +37,37 @@ def http_probe():
     print()
 
 
+def raw_probe(url):
+    """Tarayıcısız indir; HTML yapısını anlamak için parçalar yazdır."""
+    import re
+
+    print(f"## Ham HTML: {url}")
+    req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "text/html,*/*",
+                                               "Accept-Language": "tr-TR,tr;q=0.9"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            html = r.read().decode("utf-8", "replace")
+            print(f"status={r.status} len={len(html)}")
+    except urllib.error.HTTPError as e:
+        print(f"HTTP {e.code}: {e.read(300)!r}")
+        return
+    except Exception as e:  # noqa: BLE001
+        print(f"{type(e).__name__}: {e}")
+        return
+    for m in re.finditer(r'<script[^>]*id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.S):
+        print("NEXT_DATA:", m.group(1)[:3000])
+    for kw in ("bulundu", "İstanbul", "Istanbul", "Son kontrol", "müsait", "Tarih yok"):
+        i = html.find(kw)
+        if i >= 0:
+            print(f"--- '{kw}' çevresi ---")
+            print(html[max(0, i - 1500): i + 700])
+    text = re.sub(r"(?is)<(script|style)\b.*?</\1>", " ", html)
+    text = re.sub(r"(?s)<[^>]+>", " ", text)
+    print("--- metin ---")
+    print(re.sub(r"\s+", " ", text)[:3000])
+    print()
+
+
 def kosmos_probe(start_url):
     from playwright.sync_api import sync_playwright
 
@@ -107,6 +138,8 @@ if __name__ == "__main__":
 
     os.makedirs("probe", exist_ok=True)
     http_probe()
+    for url in os.environ.get("RAW_URLS", "").split():
+        raw_probe(url)
     for url in sys.argv[1:]:
         try:
             kosmos_probe(url)

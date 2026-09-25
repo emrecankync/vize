@@ -5,7 +5,10 @@ on:
     inputs:
       urls:
         description: "Tarayıcıyla incelenecek adresler (boşlukla ayırın)"
-        default: "https://www.kosmosvisa.com/"
+        default: ""
+      raw_urls:
+        description: "Tarayıcısız (ham HTML) incelenecek adresler"
+        default: ""
 
 permissions:
   contents: read
@@ -23,6 +26,7 @@ jobs:
       - run: python tools/probe.py $PROBE_URLS
         env:
           PROBE_URLS: ${{ inputs.urls }}
+          RAW_URLS: ${{ inputs.raw_urls }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
