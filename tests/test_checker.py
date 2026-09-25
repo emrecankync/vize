@@ -26,7 +26,7 @@ def rec(mission="grc", center="Istanbul", status="open", country="tur", **kw):
         "visa_category": "Short Term",
         "visa_type": "Tourism",
         "status": status,
-        "last_checked_at": "2026-09-25T10:00:00Z",
+        "last_checked_at": datetime.now(timezone.utc).isoformat(),
     }
     r.update(kw)
     return r
