@@ -1,0 +1,86 @@
+# Vize randevu takip ayarları
+# Bu dosyayı GitHub üzerinden düzenleyip kaydetmeniz yeterli; bir sonraki
+# kontrolde yeni ayarlar kullanılır.
+
+[settings]
+# Başvuruyu yaptığınız ülke (VFS kodlarıyla "tur").
+source_country = ["tur", "turkiye", "türkiye", "turkey"]
+
+# Bu durumlardan birine geçen randevular için bildirim gönderilir.
+#   open          -> randevu açık
+#   waitlist_open -> bekleme listesi açık
+notify_statuses = ["open", "waitlist_open"]
+
+# Randevu açık kalmaya devam ederse kaç saatte bir tekrar hatırlatılsın.
+# 0 = sadece ilk açıldığında haber ver.
+remind_every_hours = 6
+
+# Tüm kaynaklar arka arkaya bu kadar kontrolde hata verirse
+# "sistem veri alamıyor" uyarısı gönderilir (10 dk aralıkla 18 = ~3 saat).
+error_alert_after = 18
+
+# HTTP isteği zaman aşımı (saniye).
+timeout = 30
+
+
+# ---------------------------------------------------------------------------
+# Takip edilen ülkeler. "cities" boş bırakılırsa tüm şehirler takip edilir.
+# Sadece belirli şehirler için örnek:  cities = ["istanbul", "izmir"]
+# "visa_types" boş bırakılırsa tüm vize türleri; örnek: ["tourism", "turistik"]
+# ---------------------------------------------------------------------------
+
+[[targets]]
+name = "Yunanistan"
+codes = ["grc", "gr", "greece", "yunanistan"]
+cities = []
+visa_types = []
+
+[[targets]]
+name = "Macaristan"
+codes = ["hun", "hu", "hungary", "macaristan"]
+cities = []
+visa_types = []
+
+
+# ---------------------------------------------------------------------------
+# Veri kaynakları
+#
+# [[api]]  : Randevu durumlarını JSON olarak yayınlayan servisler.
+#            Birden fazla eklenebilir; biri çökerse diğeri kullanılır.
+# [[page]] : Herhangi bir web sayfasını izler. Sayfada belirli bir yazı
+#            çıkınca / kaybolunca ya da sayfa değişince haber verir.
+# ---------------------------------------------------------------------------
+
+[[api]]
+name = "visasbot"
+url = "https://api.visasbot.com/api/visa/list"
+enabled = true
+
+[[api]]
+name = "schengenvisaappointments"
+url = "https://api.schengenvisaappointments.com/api/visa-list/?format=json"
+enabled = true
+
+# Sayfa izleme örnekleri. Kullanmak için enabled = true yapın ve
+# kalıpları sayfada gerçekten gördüğünüz yazılara göre düzenleyin.
+#
+# mode = "appears"    -> patterns içindeki yazılardan biri sayfada ÇIKINCA haber ver
+# mode = "disappears" -> patterns içindeki yazıların hepsi sayfadan KAYBOLUNCA haber ver
+#                        (ör. "Uygun randevu bulunmamaktadır" yazısı kalkınca)
+# mode = "changes"    -> sayfanın görünen metni her DEĞİŞTİĞİNDE haber ver
+
+[[page]]
+name = "AS Visa - Macaristan duyuru sayfası"
+target = "Macaristan"
+url = "https://www.as-visa.com/Country.aspx?ID=20"
+mode = "changes"
+enabled = false
+
+# Not: Adresi ve yazıları tarayıcınızda randevu sayfasını açıp kontrol edin.
+[[page]]
+name = "Kosmos Vize - Yunanistan"
+target = "Yunanistan"
+url = "https://www.kosmosvize.com/"
+mode = "disappears"
+patterns = ["uygun randevu bulunmamaktadır", "no appointment available"]
+enabled = false
