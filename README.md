@@ -3,8 +3,15 @@
 İstanbul'daki VFS Global başvuru merkezlerinde bir **Schengen ülkesi** için randevu
 (veya bekleme listesi) açıldığında size **e-posta** ile haber verir.
 
-Sistem GitHub Actions üzerinde **her 10 dakikada bir** kendiliğinden çalışır.
+Sistem GitHub Actions üzerinde **her 5 dakikada bir** kendiliğinden çalışır.
 Bilgisayarınızın açık olması gerekmez, ücretsizdir ve **hiçbir şifre gerektirmez**.
+
+> **Nasıl sürekli çalışıyor?** GitHub'ın zamanlanmış tetikleyicisi bu repoda
+> çalışmadığı için **"Vize sürekli takip"** iş akışı ~5,5 saat boyunca 5 dakikada bir
+> kontrol eder, bitince kendini yeniden başlatır. Saatlik bir bekçi, döngü herhangi
+> bir sebeple durursa yeniden başlatmaya çalışır. Durdurmak için: Actions →
+> "Vize sürekli takip" → **Disable workflow**. `config.toml` değişiklikleri bir
+> sonraki yeniden başlatmada (en geç ~5,5 saat) devreye girer.
 
 ## Mail nasıl geliyor?
 
