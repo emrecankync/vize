@@ -2,9 +2,9 @@ name: Vize randevu kontrolü
 
 on:
   schedule:
-    # Her 10 dakikada bir (:03, :13, :23 ...). Saat başı yoğunluğundan kaçınmak
-    # için 0. dakika kullanılmıyor; GitHub yine de birkaç dakika geciktirebilir.
-    - cron: "3-59/10 * * * *"
+    # Bekçi: "Vize sürekli takip" döngüsü durmuşsa yeniden başlatır.
+    # (Asıl kontrolü döngü yapar; bu repoda GitHub cron'u güvenilir değil.)
+    - cron: "17 * * * *"
   workflow_dispatch:
     inputs:
       test_notify:
@@ -26,7 +26,28 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  watchdog:
+    if: ${{ github.event_name == 'schedule' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Döngü çalışmıyorsa başlat
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          active=$(gh run list --repo "$REPO" --workflow loop.yml --limit 20 \
+            --json status --jq '[.[] | select(.status != "completed")] | length')
+          if [ "$active" = "0" ]; then
+            echo "Döngü çalışmıyor, başlatılıyor."
+            gh workflow run loop.yml --repo "$REPO" --ref "${{ github.ref_name }}"
+          else
+            echo "Döngü zaten çalışıyor ($active)."
+          fi
+          gh api -X PUT "repos/$REPO/actions/workflows/check.yml/enable" >/dev/null || true
+          gh api -X PUT "repos/$REPO/actions/workflows/loop.yml/enable" >/dev/null || true
+
   check:
+    if: ${{ github.event_name != 'schedule' }}
     runs-on: ubuntu-latest
     timeout-minutes: 8
     env:
@@ -76,10 +97,3 @@ jobs:
         with:
           path: state
           key: vize-state-${{ github.run_id }}-${{ github.run_attempt }}
-
-      - name: Zamanlanmış görevi açık tut
-        if: ${{ always() && github.event_name == 'schedule' }}
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/check.yml/enable" >/dev/null

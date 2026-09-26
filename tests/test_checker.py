@@ -315,6 +315,17 @@ class VizetakipTests(unittest.TestCase):
         self.assertEqual(alerts, [])
 
 
+class LoopTests(unittest.TestCase):
+    def test_loop_stops_at_deadline(self):
+        clock = [1000.0]
+        with mock.patch.object(checker, "run_once") as run, \
+                mock.patch("time.time", lambda: clock[0]), \
+                mock.patch("time.sleep", lambda s: clock.__setitem__(0, clock[0] + s)):
+            rc = checker.main(["--loop", "300", "--max-minutes", "16"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(run.call_count, 4)  # 0., 5., 10. ve 15. dakika; 20. sınırı aşar
+
+
 class NotifierTests(unittest.TestCase):
     def test_github_issue(self):
         env = {"GITHUB_ISSUE_NOTIFY": "true", "GITHUB_TOKEN": "t",

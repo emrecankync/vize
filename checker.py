@@ -9,6 +9,7 @@ Sadece Python standart kütüphanesini kullanır.
 Kullanım:
     python checker.py                 # bir kez kontrol et
     python checker.py --loop 300      # 5 dakikada bir sürekli kontrol et
+    python checker.py --loop 300 --max-minutes 330   # ...ve 330 dakika sonra dur
     python checker.py --test-notify   # bildirim kanallarını test et
     python checker.py --report        # kaynaklar hangi ülkeleri kapsıyor?
 """
@@ -873,6 +874,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     ap.add_argument("--state", type=Path, default=DEFAULT_STATE)
     ap.add_argument("--loop", type=int, metavar="SANIYE", help="sürekli çalış, her N saniyede kontrol et")
+    ap.add_argument("--max-minutes", type=float, metavar="DAKIKA",
+                    help="--loop ile: bu kadar dakika sonra dur (GitHub iş süresi sınırı için)")
     ap.add_argument("--test-notify", action="store_true", help="test bildirimi gönder ve çık")
     ap.add_argument("--report", action="store_true", help="kaynakların kapsamını raporla ve çık")
     args = ap.parse_args(argv)
@@ -897,12 +900,17 @@ def main(argv: list[str] | None = None) -> int:
     if not args.loop:
         return run_once(args.config, args.state)
 
+    interval = max(60, args.loop)
+    deadline = time.time() + args.max_minutes * 60 if args.max_minutes else None
     while True:
         try:
             run_once(args.config, args.state)
         except Exception as e:  # noqa: BLE001
             log(f"Beklenmeyen hata: {type(e).__name__}: {e}")
-        time.sleep(max(60, args.loop))
+        if deadline and time.time() + interval > deadline:
+            log("Süre doldu, döngü bitiyor.")
+            return 0
+        time.sleep(interval)
 
 
 if __name__ == "__main__":

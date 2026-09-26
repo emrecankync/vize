@@ -1,0 +1,65 @@
+name: Vize sürekli takip
+
+# GitHub'ın zamanlanmış (cron) tetikleyicisi bu repoda güvenilir çalışmadığı
+# için takip kendini zincirleyen bir döngüyle yapılır: iş ~5,5 saat boyunca
+# 5 dakikada bir kontrol eder, bitince kendini yeniden başlatır.
+# Durdurmak için: Actions -> "Vize sürekli takip" -> "..." -> Disable workflow.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write # randevu açılınca issue açıp GitHub'ın e-posta atmasını sağlar
+  actions: write # döngünün kendini yeniden başlatabilmesi için
+
+concurrency:
+  group: vize-loop
+  cancel-in-progress: false
+
+jobs:
+  loop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      GITHUB_ISSUE_NOTIFY: "true"
+      GITHUB_TOKEN: ${{ github.token }}
+      SMTP_USER: ${{ secrets.SMTP_USER }}
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+      SMTP_HOST: ${{ secrets.SMTP_HOST }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      MAIL_TO: ${{ secrets.MAIL_TO }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+      NTFY_SERVER: ${{ secrets.NTFY_SERVER }}
+      NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Önceki durumu yükle
+        uses: actions/cache/restore@v4
+        with:
+          path: state
+          key: vize-state-${{ github.run_id }}
+          restore-keys: vize-state-
+
+      - name: 5 dakikada bir kontrol et (~5,5 saat)
+        run: python checker.py --loop 300 --max-minutes 330
+
+      - name: Durumu kaydet
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: state
+          key: vize-state-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Döngüyü yeniden başlat
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run loop.yml --repo "${{ github.repository }}" --ref "${{ github.ref_name }}"
